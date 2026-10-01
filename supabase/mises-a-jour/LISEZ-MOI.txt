@@ -1,0 +1,11 @@
+CES FICHIERS NE SERVENT QUE SI TU METS À JOUR UNE ANCIENNE INSTALLATION.
+
+Nouvelle installation (cas général) : n'utilise QUE ../schema.sql. Il contient déjà tout.
+Ne lance jamais ces fichiers après schema.sql.
+
+Mise à jour d'une base déjà installée : lance dans le SQL Editor, dans CET ordre et seulement ceux qui te manquent :
+  1. migration_images.sql   (schémas dans les questions)
+  2. migration_weekly.sql   (cycle hebdomadaire)
+  3. migration_ligues.sql   (ligues, badges, chapeaux)
+  4. migration_archive.sql  (archivage, santé du stockage)
+Chaque fichier peut être relancé sans danger.
