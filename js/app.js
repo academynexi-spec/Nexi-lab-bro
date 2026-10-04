@@ -61,7 +61,7 @@ const gotBadges=async L=>{if(!L?.length)return;const D=await bdefs();L.forEach((
 const stack=[];
 function push(v,a){if(stack.length)history.pushState(null,'');const s=document.createElement('section');s.className='pg';$('#stage').append(s);stack.at(-1)?.el.classList.add('under');const e={el:s,v,a};stack.push(e);draw(e);ui()}
 let skip=0;function pop(){if(stack.length<2)return;doPop();skip++;history.back()}
-const LIVE=new Set(['hub','cats','paliers','profile','hist','rank','badges','ahat','asante']);
+const LIVE=new Set(['hub','cats','paliers','profile','hist','rank','badges','ahat','asante','abulk']);
 function doPop(){const e=stack.pop(),t=stack.at(-1);e.el.classList.add('out');setTimeout(()=>e.el.remove(),280);t.el.classList.remove('under');ui();if(LIVE.has(t.v)&&e.v!=='cards')draw(t)}
 function reset(v,a){$('#stage').innerHTML='';stack.length=0;push(v,a)}
 async function draw(e){e.el.innerHTML='<p class=empty>Chargement…</p>';try{await views[e.v].r(e.el,e.a)}catch(x){e.el.innerHTML=`<p class=err>${esc(x.message)}</p>`}}
@@ -90,8 +90,8 @@ function parse(k,l){
   const m=r0.match(/^(.*)\((\d)\)\s*(?:\[(.*)\])?$/);if(!m)throw Error('index « (2) » manquant');
   const o=m[1].split(';').map(s=>s.trim()).filter(Boolean),ans=+m[2],p=(m[3]||'').split(';').map(Number);
   if(o.length<2||o.length>6||ans<1||ans>o.length)throw Error('options ou index invalides');
-  return k==='donjon'?{question:q0,options:o,answer:ans,secs:p[0]||20,nx:p[1]||10,bonus:p[2]||5,_i:ri}
-    :{question:q0,options:o,answer:ans,factor:p[0]||2,secs:p[1]||30,_i:ri}}
+  return k==='donjon'?{question:q0,options:o,answer:ans,secs:p[0]||20,nx:p[1]||10,bonus:p[2]||5,_i:ri||qi}
+    :{question:q0,options:o,answer:ans,factor:p[0]||2,secs:p[1]||30,_i:ri||qi}}
 
 async function adminWatch(el){try{const {data:u}=await sb.rpc('usage_report');if(!u)return;const p=Math.max(u.db_pct,u.storage_pct);
   if(!u.last_maint||Date.now()-new Date(u.last_maint)>6048e5)sb.rpc('maintenance');
@@ -109,14 +109,64 @@ async function archiveMonth(m,say){const [a,b]=mrange(m);let after=0;const rows=
   const {error:e2}=await sb.rpc('archive_commit',{p_month:m+'-01',p_rows:rows.length,p_path:path});if(e2)throw e2;return rows.length}
 async function dumpTables(T){const out={};for(const t of T){const R=[];for(let i=0;;i+=1000){const {data,error}=await sb.from(t).select('*').range(i,i+999);if(error)throw error;R.push(...data);if(data.length<1000)break}out[t]=R}return out}
 const save=(blob,name)=>{const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.append(a);a.click();setTimeout(()=>{a.remove();URL.revokeObjectURL(a.href)},2000)};
+/* Import massif : un fichier = plusieurs catégories, jusqu'à 30+ paliers, donjons + Nexify + cartes.
+   # Catégorie  /  ## PALIER n  /  ### DONJON [secondes;NX;bonus]  /  lignes de questions */
+const MTPL=`// MODÈLE NEXI LAB : tout ce qui commence par // est ignoré.
+// @CATEGORY = catégorie (tu peux en mettre plusieurs dans le même fichier)
+// @PALIER n | Titre = palier (jusqu'à 30 et plus), @DONJON / @NEXIFY / @CARTE = type de questions.
+// Entre crochets après @DONJON ou @NEXIFY : valeurs par défaut du bloc. Une ligne peut avoir ses propres crochets.
+// @fichier.png en fin de @PALIER, de @DONJON... ou de ligne = schéma (à choisir dans « Schémas du lot »).
+// Alias accepté : # catégorie, ## PALIER n - Titre, ### DONJON [20;10;5].
+
+@CATEGORY Hydrometallurgy
+
+@PALIER 1 | Introduction & vocabulary
+@DONJON [20;10;5]
+Que signifie PLS ? | Pregnant Leach Solution;Plant Loading System;Primary Leach Stage (1)
+Quel acide est le plus utilisé pour lixivier les oxydes de cuivre ? | Sulfurique;Chlorhydrique;Nitrique;Fluorhydrique (1) [30;10;5]
+@NEXIFY [2;30]
+Quel est le produit final d'un circuit SX-EW du cuivre ? | Cathodes de cuivre;Matte;Anodes;Boues (1)
+@CARTE
+Qu'est-ce que le leaching ? | Mise en solution d'un métal contenu dans un minerai à l'aide d'un réactif (lixiviation).
+
+@PALIER 2 | Leaching fundamentals
+@DONJON [30;10;5]
+Quelle grandeur contrôle surtout la dissolution en lixiviation acide ? | Le pH;La couleur;Le poids du sac (1)
+`;
+function parseMass(txt,exp){const out={cats:[],errors:[],warn:[],imgs:new Set()};let cat=null,pal=null,pimg=null,blk=null;
+  const err=(n,m)=>out.errors.push('Ligne '+n+' : '+m);
+  txt.split(/\r?\n/).forEach((raw,i)=>{const n=i+1,l=raw.trim();if(!l||l.startsWith('//'))return;
+    const at=l.match(/^@(CAT[EÉ]GORY|CAT[EÉ]GORIE|PALIER|DONJON|NEXIFY|CARTE)S?\b\s*(.*)$/i);
+    if(at){const d=at[1].toUpperCase(),v=at[2].trim();
+      if(d.startsWith('CAT')){if(!v)return err(n,'nom de catégorie vide');cat=out.cats.find(c=>c.name.toLowerCase()===v.toLowerCase());if(!cat){cat={name:v,rows:[],pal:new Map(),titles:new Map()};out.cats.push(cat)}pal=null;blk=null;return}
+      if(d==='PALIER'){if(!cat)return err(n,'« @PALIER » avant toute « @CATEGORY »');const m=v.match(/^(\d+)\s*(?:\|\s*(.*))?$/);if(!m)return err(n,'écris « @PALIER 3 | Titre »');
+        let t=(m[2]||'').trim();const im=t.match(IM);if(im){t=t.replace(IM,'').trim();pimg=im[1];out.imgs.add(pimg.toLowerCase())}else pimg=null;pal=+m[1];blk=null;if(t)cat.titles.set(pal,t);return}
+      const mm=v.match(/^(?:\[([^\]]*)\])?\s*(?:@(\S+))?$/);if(!mm)return err(n,'après @'+d+', seulement [secondes;NX;bonus] et @schéma.png sont possibles');
+      if(!cat||pal==null)return err(n,'« @'+d+' » avant la catégorie ou le palier');blk={k:d.toLowerCase(),def:mm[1]??null,img:mm[2]||null};if(blk.img)out.imgs.add(blk.img.toLowerCase());return}
+    const h=l.match(/^(#{1,3})\s+(.*)$/);
+    if(h){const d=h[1].length,body=h[2].trim();
+      if(d===1){const nm=body.replace(/^cat[eé]gorie\s*:\s*/i,'').trim();if(!nm)return err(n,'nom de catégorie vide');cat=out.cats.find(c=>c.name.toLowerCase()===nm.toLowerCase());if(!cat){cat={name:nm,rows:[],pal:new Map(),titles:new Map()};out.cats.push(cat)}pal=null;blk=null;return}
+      if(d===2){if(!cat)return err(n,'« ## PALIER » avant toute catégorie « # »');const m=body.match(/^(?:palier\s*)?(\d+)\b\s*(?:[-–—:]\s*)?(.*)$/i);if(!m)return err(n,'palier illisible. Exemple : ## PALIER 7');
+        let t=m[2].trim();const im=t.match(IM);if(im)t=t.replace(IM,'').trim();pal=+m[1];pimg=im?im[1]:null;blk=null;if(pimg)out.imgs.add(pimg.toLowerCase());if(t)cat.titles.set(pal,t);return}
+      const m=body.match(/^(donjon|nexify|carte)s?\b\s*(?:\[([^\]]*)\])?\s*(?:@(\S+))?\s*$/i);if(!m)return err(n,'type inconnu. Utilise ### DONJON, ### NEXIFY ou ### CARTE');
+      if(!cat||pal==null)return err(n,'« ### » avant la catégorie ou le palier');blk={k:m[1].toLowerCase(),def:m[2]??null,img:m[3]||null};if(blk.img)out.imgs.add(blk.img.toLowerCase());return}
+    if(!blk)return err(n,'ligne de question hors d’un bloc ### (catégorie, palier et type obligatoires avant)');
+    try{let ln=l,im=null;const m=ln.match(IM);if(m){im=m[1];ln=ln.replace(IM,'')}
+      if(blk.k!=='carte'&&blk.def&&!/\[[^\]]*\]\s*$/.test(ln))ln+=' ['+blk.def+']';
+      const r=parse(blk.k,ln);r._i=r._i||im||blk.img||pimg||null;
+      [r._i,r._b].forEach(x=>x&&out.imgs.add(x.toLowerCase()));
+      cat.rows.push({...r,kind:blk.k,palier:pal});const key=pal+'|'+blk.k;cat.pal.set(key,(cat.pal.get(key)||0)+1)}catch(x){err(n,x.message)}});
+  out.cats.forEach(c=>{const seen=new Set();c.rows.forEach(r=>{const k=r.palier+'|'+r.kind+'|'+r.question;if(seen.has(k))out.warn.push(c.name+' · palier '+r.palier+' : question en double ignorée « '+r.question.slice(0,40)+'… »');seen.add(k)});
+    if(exp)[...new Set(c.rows.map(r=>r.palier))].sort((a,b)=>a-b).forEach(p=>['donjon','nexify','carte'].forEach(k=>{const v=c.pal.get(p+'|'+k)||0;if(v!==exp)out.warn.push(c.name+' · palier '+p+' · '+k+' : '+v+' ligne(s) au lieu de '+exp)}))});
+  return out}
 const tiles=T=>`<div class=grid>${T.map(t=>`<button class=tile data-go=${t[0]} ${t[3]?`data-a="${A(t[3])}"`:''}><i>${t[1]}</i>${t[2]}</button>`).join('')}</div>`;
 
 const views={
 home:{t:'NEXI LAB',tip:'Bienvenue dans NEXI LAB, le laboratoire des sciences exactes de Nexi Academy.',r(el){el.classList.add('home');
-  el.innerHTML=`<img class=logo src=icons/icon-512.png alt=""><h2>NEXI LAB</h2><p class=sub>Le laboratoire des ingénieurs</p><button class=btn data-go=about>À propos</button><button class="btn hot" data-go=login>Se connecter</button>`}},
+  el.innerHTML=`<img class=logo src=icons/icon-512.png alt=""><h2>NEXI LAB</h2><p class=sub>Le laboratoire des futurs ingénieurs</p><button class=btn data-go=about>À propos</button><button class="btn hot" data-go=login>Se connecter</button>`}},
 about:{t:'À propos',tip:'Ici on raconte qui est NEXI LAB.',r(el){
   /* ✏️ MODIFIE CE TEXTE : c'est ici que tu racontes NEXI LAB dans Nexi Academy */
-  el.innerHTML=`<h2>Qui est NEXI LAB ?</h2><p>NEXI LAB est le module des sciences exactes et de la technologie de Nexi Academy. Chaque inscrit évolue dans son secteur de génie, parcours des donjons de la connaissance, mise ses NX dans Nexify et révise avec des cartes, au plus près des situations réelles de terrain : normes ISO, audit interne, simulations, optimisation de procédés, esprit d'équipe.</p>`}},
+  el.innerHTML=`<h2>Qui est NEXI LAB ?</h2><p>NEXI LAB est le module des sciences exactes et de la technologie de Nexi Academy. Chaque Nexian évolue dans son secteur de génie, affronte des donjons, mise ses NX dans Nexify et révise avec des cartes, au plus près des situations réelles de terrain : normes ISO, audit interne, safety first, optimisation de procédés, esprit d'équipe.</p>`}},
 login:{t:'Connexion',tip:'Entre ton identifiant et ton code, donnés par ton administrateur.',r(el){el.classList.add('center');
   el.innerHTML=`<img id=lg class=logo src=icons/icon-512.png alt="NEXI LAB"><form id=lf class=form><input id=u placeholder="Identifiant" autocomplete=username required><input id=p type=password placeholder="Code" autocomplete=current-password required><button class="btn hot">Entrer</button></form><p id=le class=err></p>`;
   let n=0,tm;$('#lg',el).onclick=()=>{clearTimeout(tm);if(++n>=5){n=0;ADMIN_UI=!ADMIN_UI;ui();navigator.vibrate&&navigator.vibrate(60);toast(ADMIN_UI?'Panel admin':'Panel Nexian')}tm=setTimeout(()=>n=0,1500)};
@@ -133,11 +183,12 @@ cats:{t:'Catégories',tip:'Choisis une catégorie de ton secteur.',async r(el,a)
   const has=new Set(i.data.map(x=>x.category_id)),L=c.data.filter(x=>has.has(x.id));
   el.innerHTML=`<div class=stack>${L.map(x=>`<button class=row data-go=paliers data-a="${A({k:a.k,c:x.id,n:x.name})}">${esc(x.name)}<span>›</span></button>`).join('')||'<p class=empty>Rien de publié pour l’instant.</p>'}</div>`}},
 paliers:{t:'Paliers',tip:'Chaque palier est une étape. Un ticket est utilisé quand tu commences.',async r(el,a){
-  const [it,at]=await Promise.all([sb.from('items_public').select('id,palier,weekly').eq('kind',a.k).eq('category_id',a.c),sb.from('attempts').select('item_id,n').eq('user_id',ME.id)]);
+  const [it,at,pt]=await Promise.all([sb.from('items_public').select('id,palier,weekly').eq('kind',a.k).eq('category_id',a.c),sb.from('attempts').select('item_id,n').eq('user_id',ME.id),sb.from('palier_titles').select('palier,title').eq('category_id',a.c)]);
+  const PT=Object.fromEntries((pt.data||[]).map(x=>[x.palier,x.title]));
   const m=Object.fromEntries(at.data.map(x=>[x.item_id,x.n])),mx=CFG[ME.plan].replays,P={};
   it.data.forEach(x=>(P[x.palier]??=[]).push(x));
   el.innerHTML=`<h3>${esc(a.n)}</h3><div class=grid>${Object.keys(P).sort((x,y)=>x-y).map(p=>{const dn=a.k!=='carte'&&P[p].every(x=>(m[x.id]||0)>=mx);
-    return `<button class="tile ${dn?'done':''}" ${dn?'disabled':`data-go=${a.k==='carte'?'cards':'play'} data-a="${A({...a,p:+p})}"`}><i>${dn?'✅':p}</i>${dn?'Fait':'Palier '+p}${!dn&&P[p].some(x=>x.weekly)?'<small class=wk>⭐ Défi de la semaine</small>':''}</button>`}).join('')}</div>`}},
+    return `<button class="tile ${dn?'done':''}" ${dn?'disabled':`data-go=${a.k==='carte'?'cards':'play'} data-a="${A({...a,p:+p})}"`}><i>${dn?'✅':p}</i>${dn?'Fait':'Palier '+p}${PT[p]?`<small class=pt>${esc(PT[p])}</small>`:''}${!dn&&P[p].some(x=>x.weekly)?'<small class=wk>⭐ Défi de la semaine</small>':''}</button>`}).join('')}</div>`}},
 cards:{t:'Révision',tip:'Touche la carte pour voir la réponse détaillée. Touche un schéma pour l’agrandir.',async r(el,a){
   const {data}=await sb.from('items_public').select('*').eq('kind','carte').eq('category_id',a.c).eq('palier',a.p).order('ord');
   if(!data.length){el.innerHTML='<p class=empty>Aucune carte.</p>';return}
@@ -203,7 +254,7 @@ hist:{t:'Historique',tip:'Tes performances et ton activité.',async r(el){
 
 /* ---------- ADMIN ---------- */
 ahub:{t:'NEXI LAB · ADMIN',tip:'Gestion complète de NEXI LAB.',r(el){
-  el.innerHTML=`${tiles([['anex','👥','Nexians'],['acont','⚔️','Donjons',{k:'donjon'}],['acont','🎲','Nexify',{k:'nexify'}],['acont','🃏','Cartes',{k:'carte'}],['arank','🏆','Classement'],['ahat','🎩','Chapeaux'],['asante','💾','Santé & archives'],['aset','⚙️','Réglages']])}<button class="btn ghost" id=out>Déconnexion</button>`;
+  el.innerHTML=`${tiles([['anex','👥','Nexians'],['acont','⚔️','Donjons',{k:'donjon'}],['acont','🎲','Nexify',{k:'nexify'}],['acont','🃏','Cartes',{k:'carte'}],['arank','🏆','Classement'],['abulk','📦','Import massif'],['ahat','🎩','Chapeaux'],['asante','💾','Santé & archives'],['aset','⚙️','Réglages']])}<button class="btn ghost" id=out>Déconnexion</button>`;
   $('#out',el).onclick=async()=>{await sb.auth.signOut();ME=null;ADMIN_UI=false;reset('home')};adminWatch(el)}},
 anex:{t:'Nexians',tip:'Crée et modifie les comptes des Nexians.',async r(el){
   const {data}=await sb.from('profiles').select('*').eq('role','nexian').order('full_name');
@@ -297,6 +348,39 @@ ahatd:{t:'Chapeau',tip:'Choisis les membres, suis le classement, puis clôture :
       const {data:d,error}=await sb.rpc('close_hat',{p_hat:h.id});if(error)return toast(error.message,'ko');toast('Concours clôturé'+(d?.[0]?' · vainqueur : '+d[0].pseudo+' ('+d[0].full_name+')':''),'ok');const e=stack.at(-1);e.a={...h,closed:true,ends_at:new Date().toISOString()};draw(e)}}
   $('#hd',el).onclick=async()=>{if(!confirm('Supprimer ce chapeau et son classement ?'))return;const {error}=await sb.from('hats').delete().eq('id',h.id);if(error)return toast(error.message,'ko');pop()};
   board();list()}},
+abulk:{t:'Import massif',tip:'Un seul fichier pour plusieurs catégories et 30+ paliers (donjons, Nexify, cartes, titres, schémas). Vérifie d’abord, importe ensuite. Les questions déjà présentes sont ignorées : tu peux relancer sans risque.',r(el){
+  el.innerHTML=`<div class=form><label>Secteur<select id=se>${sectOpts()}</select></label>
+  <label>Fichier(s) .txt (ou colle le texte ci-dessous)<input type=file id=ff accept=".txt,text/plain" multiple></label>
+  <label>Contenu<textarea id=tx rows=9 placeholder="# Hydrometallurgy&#10;## PALIER 1&#10;### DONJON [20;10;5]&#10;Question | A;B;C (2)"></textarea></label>
+  <label>Schémas du lot (tous les fichiers cités par @nom.png)<input type=file id=fm multiple accept="${FA}"></label>
+  <label>Questions attendues par bloc (alerte si différent, 0 = ne pas contrôler)<input id=ex type=number min=0 value=10></label>
+  <label class=chk><input type=checkbox id=wk>⭐ Marquer donjons et Nexify « Défi de la semaine » (déconseillé pour un gros import)</label>
+  <label class=chk><input type=checkbox id=rpl>♻ Remplacer le contenu existant des paliers du fichier (pour corriger : efface les tentatives des joueurs sur ces paliers)</label>
+  <div class=tabs><button id=vf>Vérifier</button><button id=md>Télécharger un modèle</button></div><div id=rp class=stack></div><button class="btn hot" id=im disabled>Importer</button><p class=cnt id=pg></p></div>`;
+  let ok=null;const rp=$('#rp',el),read=async()=>{let t=$('#tx',el).value;for(const f of $('#ff',el).files)t+='\n'+await f.text();return t};
+  $('#md',el).onclick=()=>save(new Blob(['\ufeff'+MTPL],{type:'text/plain'}),'modele-import-nexi-lab.txt');
+  ['tx','ff','fm','ex'].forEach(i=>$('#'+i,el).addEventListener('change',()=>{ok=null;$('#im',el).disabled=true}));$('#tx',el).addEventListener('input',()=>{ok=null;$('#im',el).disabled=true});
+  $('#vf',el).onclick=async()=>{const r=parseMass(await read(),+$('#ex',el).value||0),have=new Set([...$('#fm',el).files].map(f=>f.name.toLowerCase())),miss=[...r.imgs].filter(x=>!have.has(x));
+    miss.forEach(x=>r.errors.push('Schéma introuvable dans « Schémas du lot » : '+x));if(!r.cats.length&&!r.errors.length)r.errors.push('Aucune catégorie trouvée : commence par une ligne « # Nom de la catégorie ».');
+    const tot=r.cats.reduce((s,c)=>s+c.rows.length,0);
+    rp.innerHTML=(r.errors.length?`<p class=err>❌ ${r.errors.length} erreur(s) : rien ne sera importé tant qu’elles ne sont pas corrigées.</p>`+r.errors.slice(0,12).map(e=>`<p class=err>${esc(e)}</p>`).join('')+(r.errors.length>12?`<p class=cnt>… et ${r.errors.length-12} autre(s)</p>`:''):`<p class=cnt>✅ ${tot} ligne(s) prêtes · ${r.cats.length} catégorie(s)${r.imgs.size?' · '+r.imgs.size+' schéma(s)':''}</p>`)
+      +r.cats.map(c=>{const P=[...new Set(c.rows.map(x=>x.palier))],cn=k=>c.rows.filter(x=>x.kind===k).length;return `<div class=row><span>${esc(c.name)}<br><small>${P.length} palier(s) · ${c.titles.size} titre(s) · donjon ${cn('donjon')} · nexify ${cn('nexify')} · carte ${cn('carte')}</small></span><b>${c.rows.length}</b></div>`}).join('')
+      +(r.warn.length?`<p class=warn>⚠️ ${r.warn.length} avertissement(s)</p>`+r.warn.slice(0,8).map(e=>`<p class=cnt>${esc(e)}</p>`).join(''):'');
+    ok=r.errors.length?null:r;$('#im',el).disabled=!ok};
+  $('#im',el).onclick=async e=>{if(!ok)return;const b=e.target,sec=$('#se',el).value;if(!confirm('Importer '+ok.cats.length+' catégorie(s) dans le secteur « '+$('#se',el).selectedOptions[0].text+' » ?'+($('#rpl',el).checked?'\n\n♻ Les paliers du fichier seront REMPLACÉS (tentatives des joueurs effacées).':'')))return;
+    b.disabled=true;const files=new Map([...$('#fm',el).files].map(f=>[f.name.toLowerCase(),f])),up=new Map(),done=new Set(),res=[];
+    const put=async nm=>{if(!up.has(nm))up.set(nm,await upImg(files.get(nm.toLowerCase())));return up.get(nm)};
+    try{for(let ci=0;ci<ok.cats.length;ci++){const c=ok.cats[ci],mine=[];$('#pg',el).textContent='Catégorie '+(ci+1)+' / '+ok.cats.length+' : '+c.name+'…';
+      try{const rows=[];for(const r of c.rows){const o={kind:r.kind,palier:r.palier,question:r.question,options:r.options,answer:r.answer,secs:r.secs,nx:r.nx,bonus:r.bonus,factor:r.factor,back:r.back};
+          for(const [k,s] of [['image',r._i],['back_image',r._b]])if(s){const had=up.has(s);o[k]=await put(s);if(!had)mine.push(o[k])}
+          rows.push(o)}
+        const {data,error}=await sb.rpc('import_bulk',{p_sector:+sec,p_cat:c.name,p_rows:rows,p_weekly:$('#wk',el).checked,p_titles:[...c.titles].map(([palier,title])=>({palier,title})),p_replace:$('#rpl',el).checked});if(error)throw error;
+        mine.forEach(x=>done.add(x));[...up.values()].forEach(x=>done.add(x));res.push(data)}
+      catch(x){await rmImg(mine.filter(y=>!done.has(y)));throw Error(c.name+' : '+(/import_bulk/.test(x.message)?'fonction manquante. Lance supabase/mises-a-jour/migration_import.sql (voir le guide)':x.message))}}
+      const I=res.reduce((s,x)=>s+x.inserted,0),K=res.reduce((s,x)=>s+x.skipped,0);
+      rp.innerHTML=`<p class=cnt>✅ Terminé : ${I} ajoutée(s), ${K} déjà présente(s) ignorée(s).</p>`+res.map(x=>`<div class=row><span>${esc(x.category)}</span><b>+${x.inserted}</b></div>`).join('');$('#pg',el).textContent='';toast(I+' ligne(s) importée(s)','ok');ok=null}
+    catch(x){toast(x.message,'ko');rp.insertAdjacentHTML('afterbegin',`<p class=err>❌ ${esc(x.message)}${res.length?' (catégories déjà importées : '+res.length+' ; relancer ignore les doublons)':''}</p>`);$('#pg',el).textContent=''}
+    finally{b.disabled=!ok}}}},
 asante:{t:'Santé & archives',tip:'Surveille l’espace utilisé sur Supabase (gratuit : 500 Mo de base, 1 Go de fichiers) et archive l’historique ancien sans rien perdre.',async r(el){
   const [{data:u,error},{data:cfg},{data:log}]=await Promise.all([sb.rpc('usage_report'),sb.from('app_cfg').select('*').single(),sb.from('archive_log').select('*').order('month',{ascending:false})]);
   if(error)return el.innerHTML=`<p class=err>${esc(error.message)}</p>`;
@@ -320,7 +404,7 @@ asante:{t:'Santé & archives',tip:'Surveille l’espace utilisé sur Supabase (g
     for(const bk of [...new Set(o.map(x=>x.bucket))]){const N=o.filter(x=>x.bucket===bk).map(x=>x.name);for(let i=0;i<N.length;i+=100)await sb.storage.from(bk).remove(N.slice(i,i+100))}
     const {data:m,error}=await sb.rpc('maintenance');if(error)throw error;toast('Nettoyé : '+o.length+' fichier(s), '+m.tlog+' ligne(s) de tickets','ok');redo()});
   $('#em',el)&&($('#em',el).onclick=e=>busy(e.target,async()=>{const {error}=await sb.from('app_cfg').update({emergency:false}).eq('id',1);if(error)throw error;toast('Mode économie désactivé','ok');redo()}));
-  $('#bj',el).onclick=e=>busy(e.target,async()=>{const d=await dumpTables(['profiles','sectors','categories','items','weekly_archive','user_stats','history_monthly','user_badges','hats','hat_members','archive_log']);
+  $('#bj',el).onclick=e=>busy(e.target,async()=>{const d=await dumpTables(['profiles','sectors','categories','items','weekly_archive','palier_titles','user_stats','history_monthly','user_badges','hats','hat_members','archive_log']);
     save(new Blob([JSON.stringify({version:1,date:new Date().toISOString(),tables:d})],{type:'application/json'}),'nexi-lab-sauvegarde-'+new Date().toISOString().slice(0,10)+'.json');toast('Sauvegarde téléchargée','ok')});
   $('#bc',el).onclick=e=>busy(e.target,async()=>{const d=await dumpTables(['profiles','weekly_archive','user_stats']),day=new Date().toISOString().slice(0,10);
     const C={profiles:['full_name','pseudo','login','sector_id','plan','plan_end','nx','wnx','league','created_at'],weekly_archive:['week_start','week_end','sector_id','pseudo','full_name','wnx','pos','active_days','answers','accuracy','league','move'],user_stats:['user_id','answers','correct','donjon_ok','best_gain','first_at','last_at']};
